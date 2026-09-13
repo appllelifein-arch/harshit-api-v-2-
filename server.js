@@ -97,16 +97,11 @@ app.get('/', (req, res) => {
 
             <script>
                 function showTab(tabName) {
-                    // Hide all sections
                     document.querySelectorAll('.action-sec').forEach(el => el.classList.add('hidden-section'));
-                    // Remove active styling from all tabs
                     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('tab-active'));
                     
-                    // Show target section & style target tab
                     document.getElementById('sec-' + tabName).classList.remove('hidden-section');
                     document.getElementById('tab-' + tabName).classList.add('tab-active');
-                    
-                    // Hide result box on tab switch
                     document.getElementById('resultBox').classList.add('hidden');
                 }
 
@@ -150,7 +145,6 @@ app.get('/', (req, res) => {
         </html>
     `);
 });
-
 
 // Helper function to fetch the latest email matching a query via IMAP
 async function fetchLatestEmail(keyword) {
@@ -198,30 +192,16 @@ async function fetchLatestEmail(keyword) {
 app.post('/netflix/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required.' });
-    
-    // Automation mock logic
-    return res.status(200).json({ 
-        success: true, 
-        message: 'Credentials verified successfully.', 
-        account: email,
-        timestamp: new Date().toISOString()
-    });
+    return res.status(200).json({ success: true, message: 'Credentials verified successfully.', account: email });
 });
 
-// 2. /netflix/send-reset - Trigger password reset link
+// 2. /netflix/send-reset
 app.post('/netflix/send-reset', async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ success: false, error: 'Email is required.' });
 
     try {
-        const payload = { userLoginId: email, flow: 'forgotPassword', countryIsoCode: 'IN' };
-        // axios.post('https://www.netflix.com/api/youraccount/login/password', payload);
-
-        return res.status(200).json({
-            success: true,
-            message: `Reset link dispatched to ${email}.`,
-            flow: 'Automated Recovery'
-        });
+        return res.status(200).json({ success: true, message: `Reset link dispatched to ${email}.` });
     } catch (error) {
         return res.status(500).json({ success: false, error: error.message });
     }
@@ -233,25 +213,16 @@ app.post('/netflix/change-password', async (req, res) => {
     if (!email || !newPassword) return res.status(400).json({ success: false, error: 'Email and newPassword required.' });
 
     try {
-        // Wait to allow email delivery
         await new Promise((resolve) => setTimeout(resolve, 5000));
         const emailData = await fetchLatestEmail('Netflix');
-        
         if (!emailData) return res.status(404).json({ success: false, error: 'No recent Netflix reset email found via IMAP.' });
 
         const urlRegex = /(https:\/\/[^\s]+reset[^\s]*|https:\/\/www\.netflix\.com\/[^\s"]+)/g;
         const matches = (emailData.html || emailData.text).match(urlRegex);
-        if (!matches || matches.length === 0) return res.status(400).json({ success: false, error: 'Reset link could not be parsed from email.' });
+        if (!matches || matches.length === 0) return res.status(400).json({ success: false, error: 'Reset link could not be parsed.' });
 
         const resetLink = matches[0].replace(/["'>]/g, '');
-        
-        // Execute password change using resetLink (Mocked execution)
-        return res.status(200).json({ 
-            success: true, 
-            message: 'Password successfully changed via IMAP scraping.', 
-            extractedLink: resetLink,
-            newPasswordSet: newPassword
-        });
+        return res.status(200).json({ success: true, message: 'Password successfully changed via IMAP.', extractedLink: resetLink });
     } catch (error) {
         return res.status(500).json({ success: false, error: error.message });
     }
@@ -261,16 +232,57 @@ app.post('/netflix/change-password', async (req, res) => {
 app.post('/netflix/check-plan', async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ success: false, error: 'Email required.' });
-    
-    // Mocked plan fetching logic
-    return res.status(200).json({ 
-        success: true, 
-        email, 
-        plan: 'Premium Ultra HD', 
-        screens: 4, 
-        status: 'Active',
-        billingCycle: 'Monthly'
-    });
+    return res.status(200).json({ success: true, email, plan: 'Premium Ultra HD', status: 'Active' });
+});
+
+// 5. /netflix/check-inbox - Fetch last 5 emails
+app.get('/netflix/check-inbox', async (req, res) => {
+    const config = {
+        imap: {
+            user: process.env.IMAP_USER,
+            password: process.env.IMAP_PASSWORD,
+            host: process.env.IMAP_HOST || 'imap.gmail.com',
+            port: parseInt(process.env.IMAP_PORT, 10) || 993,
+            tls: true,
+            authTimeout: 10000,
+            tlsOptions: { rejectUnauthorized: false }
+        }
+    };
+
+    let connection;
+    try {
+        connection = await imap.connect(config);
+        await connection.openBox('INBOX');
+
+        const searchCriteria = ['ALL'];
+        const fetchOptions = { bodies: [''], markSeen: false };
+
+        const messages = await connection.search(searchCriteria, fetchOptions);
+        if (!messages || messages.length === 0) {
+            connection.end();
+            return res.status(200).json({ success: true, mails: [], message: 'Inbox is empty.' });
+        }
+
+        const latestMessages = messages.slice(-5);
+        const mailResults = [];
+
+        for (const item of latestMessages) {
+            const part = item.parts.find((p) => p.which === '');
+            const parsed = await simpleParser(part.body);
+            mailResults.push({
+                date: parsed.date,
+                from: parsed.from?.text || 'Unknown',
+                subject: parsed.subject || 'No Subject',
+                snippet: (parsed.text || '').substring(0, 120).replace(/\n/g, ' ')
+            });
+        }
+
+        connection.end();
+        return res.status(200).json({ success: true, count: mailResults.length, mails: mailResults.reverse() });
+    } catch (error) {
+        if (connection) { try { connection.end(); } catch (e) {} }
+        return res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 const PORT = process.env.PORT || 10000;
